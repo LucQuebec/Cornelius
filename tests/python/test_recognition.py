@@ -271,3 +271,31 @@ class RecognitionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeadPitchTests(unittest.TestCase):
+    """L’angle de la tête, retrouvé à partir des cinq repères projetés d’un visage tourné."""
+
+    def project(self, degrees, camera_tilt=0.0):
+        import cv2
+        from vision import FACE_MODEL
+        width, height = 1280, 720
+        angle = np.radians(-degrees + camera_tilt)
+        rotation = np.array([[1, 0, 0], [0, np.cos(angle), -np.sin(angle)], [0, np.sin(angle), np.cos(angle)]])
+        points = FACE_MODEL @ rotation.T + np.array([0, 0, 600.0])
+        focal = max(width, height)
+        projected = points[:, :2] / points[:, 2:] * focal + np.array([width / 2, height / 2])
+        face = np.zeros(15)
+        face[4:14] = projected.flatten()
+        return face, width, height
+
+    def test_chin_up_is_positive_and_measured_in_degrees(self):
+        from vision import head_pitch
+        for degrees in (-20, -8, 0, 8, 20):
+            self.assertAlmostEqual(head_pitch(*self.project(degrees)), degrees, delta=1.5)
+
+    def test_a_plunging_camera_shifts_every_angle_by_the_same_amount(self):
+        from vision import head_pitch
+        front = head_pitch(*self.project(0, camera_tilt=15))
+        up = head_pitch(*self.project(10, camera_tilt=15))
+        self.assertAlmostEqual(up - front, 10, delta=1.5)

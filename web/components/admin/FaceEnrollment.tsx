@@ -399,12 +399,8 @@ function EnrollmentGuide({
   const message = progress?.message ?? 'Regardez la caméra de face.';
   // Un message qui n’est pas la consigne de l’étape signale ce qui bloque.
   const problem = !PROMPTS.has(message);
-  // Haut et bas se font dans l’ordre choisi : si la tête a d’abord été baissée, la
-  // dernière étape devient « Vers le haut ».
-  const steps =
-    step === 4 && message === 'Levez légèrement le menton.'
-      ? [STEPS[0]!, STEPS[1]!, STEPS[2]!, STEPS[4]!, STEPS[3]!]
-      : STEPS;
+  // Toujours dans le même ordre : le haut, puis le bas.
+  const steps = STEPS;
   return (
     <section className="admin-enroll" aria-label={'Enregistrement du visage de ' + name}>
       <div className="admin-enroll-preview">

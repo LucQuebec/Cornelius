@@ -27,6 +27,71 @@ class Track:
     last_seen: float
 
 
+# Visage moyen en millimètres, dans les axes de la caméra (x à droite, y vers le bas, z vers le
+# fond) : nez à l’origine, yeux et coins de la bouche en retrait. Ordre des repères de YuNet :
+# œil à gauche de l’image, œil à droite, nez, coin gauche, coin droit de la bouche.
+FACE_MODEL = np.array([
+    (-32.0, -36.0, 27.0), (32.0, -36.0, 27.0), (0.0, 0.0, 0.0), (-24.0, 32.0, 20.0), (24.0, 32.0, 20.0),
+], dtype=np.float64)
+
+
+def head_pitch(face, width, height):
+    """Inclinaison verticale de la tête en degrés (positive : menton levé), ou NaN.
+
+    Un vrai angle, calculé par solvePnP sur les cinq repères : une caméra plongeante ou basse
+    décale seulement la valeur de face, que l’enregistrement prend pour repère.
+    """
+    points = np.array([(face[4 + 2 * i], face[5 + 2 * i]) for i in range(5)], dtype=np.float64)
+    # Yeux et coins de la bouche rangés de gauche à droite dans l’image : une image en miroir
+    # (caméra du navigateur) donnerait sinon un visage impossible à faire tourner.
+    points[0:2] = points[0:2][np.argsort(points[0:2, 0])]
+    points[3:5] = points[3:5][np.argsort(points[3:5, 0])]
+    focal = float(max(width, height))
+    camera = np.array([[focal, 0, width / 2], [0, focal, height / 2], [0, 0, 1]], dtype=np.float64)
+    try:
+        ok, rotation, _ = cv2.solvePnP(FACE_MODEL, points, camera, None, flags=cv2.SOLVEPNP_EPNP)
+    except cv2.error:
+        return float("nan")
+    if not ok:
+        return float("nan")
+    matrix, _ = cv2.Rodrigues(rotation)
+    # Rotation autour de l’axe horizontal ; dans ces axes, un angle négatif lève le menton.
+    return -float(np.degrees(np.arctan2(matrix[2, 1], matrix[2, 2])))
+
+
+class HeadPose:
+    """Angle de la tête par un réseau entraîné pour cela : les cinq repères de YuNet ne suffisent
+    pas à mesurer le haut et le bas (mesures de -18° à +10° pour un même geste, 2026-11-27).
+
+    Modèle MobileNetV2 de yakhyo/head-pose-estimation (code MIT ; poids entraînés sur 300W-LP,
+    usage non commercial) : image du visage 224 × 224, sortie une matrice de rotation.
+    """
+    MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    # Sens mesuré sur le miroir : positif quand le menton se lève.
+    SIGN = 1.0
+
+    def __init__(self, path):
+        import onnxruntime as ort
+        options = ort.SessionOptions()
+        options.inter_op_num_threads = options.intra_op_num_threads = 1
+        self.session = ort.InferenceSession(str(path), sess_options=options, providers=["CPUExecutionProvider"])
+        self.input = self.session.get_inputs()[0].name
+
+    def pitch(self, frame, face):
+        x, y, w, h = (float(value) for value in face[:4])
+        # Cadre agrandi de 20 %, comme à l’entraînement du modèle.
+        left, top = int(max(0, x - 0.2 * h)), int(max(0, y - 0.2 * w))
+        right, bottom = int(min(frame.shape[1], x + w + 0.2 * h)), int(min(frame.shape[0], y + h + 0.2 * w))
+        if right - left < 16 or bottom - top < 16:
+            return float("nan")
+        crop = cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2RGB)
+        crop = cv2.resize(crop, (224, 224)).astype(np.float32) / 255.0
+        tensor = np.transpose((crop - self.MEAN) / self.STD, (2, 0, 1))[None].astype(np.float32)
+        matrix = self.session.run(None, {self.input: tensor})[0][0]
+        return self.SIGN * float(np.degrees(np.arctan2(matrix[2, 1], matrix[2, 2])))
+
+
 def _seconds(value_ms, message):
     if isinstance(value_ms, bool) or not isinstance(value_ms, (int, float)) or not 0 <= value_ms <= 60000:
         raise ValueError(message)
@@ -56,6 +121,11 @@ class Vision:
         cv2.setNumThreads(1)
         self.detector = cv2.FaceDetectorYN.create(str(models / "yunet.onnx"), "", (640, 480), 0.85, 0.3, 100)
         self.recognizer = cv2.FaceRecognizerSF.create(str(models / "sface.onnx"), "")
+        # Angle de la tête : modèle dédié s’il est installé, sinon calcul sur les cinq repères.
+        try:
+            self.head_pose = HeadPose(models / "headpose.onnx") if (models / "headpose.onnx").exists() else None
+        except Exception:
+            self.head_pose = None
         self.threshold = threshold
         self.pose_tolerance = DEFAULT_ENGAGEMENT["poseTolerance"]
         self.min_face_ratio = DEFAULT_ENGAGEMENT["minFaceRatio"]
@@ -196,11 +266,10 @@ class Vision:
             span = right - left
             nose = float(face[8])
             pose = (nose - (left + right) / 2) / max(span, 1)
-            # Inclinaison verticale : position du nez entre la ligne des yeux et la bouche.
-            # Sa valeur de face varie selon les visages ; l’enrôlement la prend pour repère.
-            eyes_y = (float(face[5]) + float(face[7])) / 2
-            mouth_y = (float(face[11]) + float(face[13])) / 2
-            pitch = (float(face[9]) - eyes_y) / max(mouth_y - eyes_y, 1)
+            # Inclinaison verticale en degrés ; sa valeur de face varie selon le visage et la
+            # hauteur de la caméra : l’enregistrement la prend pour repère.
+            head_pose = getattr(self, "head_pose", None)
+            pitch = head_pose.pitch(frame, face) if head_pose else head_pitch(face, width, frame.shape[0])
             issue, usable = self._quality(frame, face, pose)
             scores = [(profile_score(vectors, feature), profile_id) for profile_id, vectors in self.profiles]
             identity = track.identity.update(

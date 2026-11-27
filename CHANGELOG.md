@@ -6,6 +6,12 @@ Le fonctionnement actuel est décrit dans la [documentation](docs/README.md). Ce
 
 ## Non publié
 
+### 2026-11-27 : visage, étapes « Vers le haut » et « Vers le bas »
+
+**Corrigé**
+
+- **Enregistrement du visage : le haut et le bas avec une caméra plongeante.** L’étape « Vers le haut » ne démarrait pas sans regarder le plafond, sans consigne, et la consigne alternait parfois entre « Levez » et « Baissez ». Les cinq repères de YuNet ne mesurent pas l’inclinaison (de −18° à +10° pour un même geste) : l’angle de la tête vient maintenant d’un petit modèle dédié, MobileNetV2 de yakhyo/head-pose-estimation (ONNX, 8,4 Mo, 2 ms ; code MIT, poids entraînés sur 300W-LP, usage non commercial), avec un calcul `solvePnP` sur les repères en secours. Le haut puis le bas, toujours dans cet ordre, à 5° de la position de face (la caméra plongeante est compensée) ; angle lissé sur cinq images ; « Levez le menton un peu plus » en jaune quand le geste est trop petit ; ressemblance exigée de 0,25 au lieu de 0,35 pour ces deux étapes. Les visages déjà mémorisés restent valides. Nouveau modèle `headpose.onnx` dans `perception/models.json` (par [LucQuebec](https://github.com/LucQuebec)).
+
 ### 2026-11-25 : lecteur audio, flux HLS
 
 **Ajouté**

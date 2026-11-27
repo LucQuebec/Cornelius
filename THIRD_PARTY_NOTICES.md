@@ -35,6 +35,7 @@ En dehors du mot d’appel « Cornelius » (voir plus haut), Cornelius ne contie
 | YuNet (détection des visages) | OpenCV Zoo, Shiqi Yu et al. | MIT |
 | SFace (reconnaissance des visages) | OpenCV Zoo, Yaoyao Zhong et al. | Apache 2.0 |
 | Silero VAD (détection de la parole) | Silero Team | MIT |
+| Angle de la tête (`headpose.onnx`, MobileNetV2) | yakhyo/head-pose-estimation | code MIT ; poids entraînés sur 300W-LP, usage non commercial |
 | LFM2.5-VL 450M, 1.6B et 3B (vision locale) | Liquid AI | LFM Open License v1.0 |
 | Prétraitement du mot d’appel (`melspectrogram.onnx`, `embedding_model.onnx`) | openWakeWord, David Scripka | voir [docs/reference/licences.md](docs/reference/licences.md) |
 | SDXL Turbo | Stability AI | Stability AI Community License |
