@@ -15,6 +15,7 @@ Cette page est l’index de la documentation. Elle indique par où commencer, pu
 | installer Cornelius | [Linux](installation/linux.md), [Raspberry Pi](installation/raspberry-pi.md), [Windows](installation/windows.md), [Home Assistant](installation/home-assistant.md), puis [carte graphique](installation/gpu.md) si besoin |
 | réussir le premier lancement | [Premier démarrage](installation/premier-demarrage.md) |
 | choisir ce qui ouvre la conversation | [Ouverture et présence](fonctionnalites/ouverture-et-presence.md), [Mot d’appel](fonctionnalites/mot-d-appel.md) |
+| être reconnu à la voix, même caméra éteinte | [La reconnaissance de la voix](fonctionnalites/reconnaissance-de-la-voix.md) |
 | parler à Cornelius depuis une autre pièce | [Les satellites audio](fonctionnalites/satellites.md) |
 | utiliser mon téléphone comme satellite | [Le satellite Android](fonctionnalites/satellite-android.md) |
 | utiliser Cornelius sur mon téléphone, hors de la maison | [Cornelius portable](fonctionnalites/cornelius-portable.md) |
@@ -48,6 +49,7 @@ Cette page est l’index de la documentation. Elle indique par où commencer, pu
 ## Fonctionnalités
 
 - [Ouverture et présence](fonctionnalites/ouverture-et-presence.md) : ce qui ouvre, fait durer et ferme une conversation.
+- [La reconnaissance de la voix](fonctionnalites/reconnaissance-de-la-voix.md) : qui dit « Cornelius », sans caméra ; caméra seulement au mot d’appel.
 - [Le mot d’appel](fonctionnalites/mot-d-appel.md) : ouvrir la conversation en disant « Cornelius ».
 - [Les satellites audio](fonctionnalites/satellites.md) : un micro et un haut-parleur dans une autre pièce, installés et associés sans saisie.
 - [Le satellite Android](fonctionnalites/satellite-android.md) : un téléphone comme satellite vocal, y compris hors du réseau local.

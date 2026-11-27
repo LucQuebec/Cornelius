@@ -487,6 +487,25 @@ ${googlePhotosMigration}`,
   INSERT OR IGNORE INTO end_word_phrases (id) VALUES (1);`,
   // Cornelius portable : le tailscaled que Cornelius a lui-même relié au compte.
   portableOwnershipMigration,
+  // Reconnaissance du locuteur : empreintes vocales CAM++ par profil, effacées avec lui.
+  `CREATE TABLE IF NOT EXISTS profile_voices (
+    profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    templates TEXT NOT NULL,
+    model TEXT NOT NULL,
+    enrolled_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS voice_recognition_preferences (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    threshold REAL NOT NULL DEFAULT 0.45 CHECK (threshold BETWEEN 0.2 AND 0.9),
+    margin REAL NOT NULL DEFAULT 0.08 CHECK (margin BETWEEN 0 AND 0.5)
+  ) STRICT;
+  INSERT OR IGNORE INTO voice_recognition_preferences (id) VALUES (1);`,
+  // Caméra seulement au mot d’appel : éteinte en veille avec « Cornelius ».
+  `CREATE TABLE IF NOT EXISTS camera_wake_preferences (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1))
+  ) STRICT;
+  INSERT OR IGNORE INTO camera_wake_preferences (id) VALUES (1);`,
 ];
 
 /** The server owns this connection. Backups include WAL changes via SQLite itself. */
@@ -590,6 +609,7 @@ export function normalizeOpening(preferences: SessionPreferences): boolean {
     knownPeopleOnly: preferences.getKnownPeopleOnly(),
     wakeWord: preferences.getWakeWordEnabled(),
     voiceRecognition: preferences.getVoiceRecognition(),
+    cameraOnWake: preferences.getCameraOnWake(),
   };
   const target = settingsForOpening(openingFromSettings(current));
   if (sameOpeningSettings(current, target)) return false;
@@ -597,6 +617,7 @@ export function normalizeOpening(preferences: SessionPreferences): boolean {
   preferences.setKnownPeopleOnly(target.knownPeopleOnly);
   preferences.setWakeWordEnabled(target.wakeWord);
   preferences.setVoiceRecognition(target.voiceRecognition);
+  preferences.setCameraOnWake(target.cameraOnWake === true);
   return true;
 }
 
@@ -933,6 +954,18 @@ export class SessionPreferences {
   setVoiceRecognition(enabled: boolean): void {
     this.db
       .prepare('UPDATE listening_preferences SET voice_recognition = ? WHERE id = 1')
+      .run(Number(enabled));
+  }
+  /** « Cornelius » : caméra éteinte en veille, allumée seulement pendant la conversation. */
+  getCameraOnWake(): boolean {
+    return (
+      this.db.prepare('SELECT enabled FROM camera_wake_preferences WHERE id = 1').get()?.enabled ===
+      1
+    );
+  }
+  setCameraOnWake(enabled: boolean): void {
+    this.db
+      .prepare('UPDATE camera_wake_preferences SET enabled = ? WHERE id = 1')
       .run(Number(enabled));
   }
 }

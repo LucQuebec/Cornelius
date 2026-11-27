@@ -743,10 +743,21 @@ export async function createApp(
   // sinon éteinte. Modes caméra : toujours allumée.
   perception.setCameraPolicy(() => {
     const session = controller.sessionState();
-    if (session.mode !== 4 || controller.isVoiceRecognitionEnabled()) return true;
-    if (!vision.isEnabled()) return false;
+    if (session.mode !== 4) return true;
+    // Reconnaissance par la caméra en veille, sauf option « caméra seulement au mot d’appel ».
+    if (controller.isVoiceRecognitionEnabled() && !controller.isCameraOnWake()) return true;
+    // Option « caméra seulement au mot d’appel » : elle s’allume pendant chaque conversation.
+    if (
+      !vision.isEnabled() &&
+      !controller.isVoiceRecognitionEnabled() &&
+      !controller.isCameraOnWake()
+    )
+      return false;
+    // « Cornelius » entendu sans voix reconnue (membres) : la caméra cherche un visage connu.
+    if (controller.isWakeCheckPending()) return true;
     // Une conversation de satellite se tient dans une autre pièce : la caméra n’a rien à voir.
-    return ['connecting', 'ready'].includes(session.phase) && !session.satellite;
+    if (!['connecting', 'ready'].includes(session.phase) || session.satellite) return false;
+    return true;
   });
   const app = Fastify({ logger: false, bodyLimit: 16_384, requestTimeout: 10_000 });
   // Sessions administrateur en mémoire (un redémarrage les ferme), avec une expiration
@@ -1037,7 +1048,10 @@ export async function createApp(
       !!config.perceptionToken &&
       equalSecret(String(req.headers.authorization ?? ''), 'Bearer ' + config.perceptionToken),
     faceForgotten: (profileId) => eraser.faceForgotten(profileId),
+    voiceForgotten: (profileId) => eraser.voiceForgotten(profileId),
   });
+  perception.onVoiceIdentified = (interactionId, profileId) =>
+    controller.voiceIdentified(interactionId, profileId);
 
   registerHomeAssistant(app, homeAssistant, requireAdmin, () => controller.homeAssistantChanged());
   satelliteGestures.register(app, requireAdmin);

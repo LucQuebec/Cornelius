@@ -77,9 +77,10 @@ La dernière commande télécharge la version de la vision adaptée au GPU. Les 
 .venv\Scripts\python -m pip install -r perception\requirements-wake.txt
 .venv\Scripts\python -m pip install --no-deps openwakeword==0.6.0
 .venv\Scripts\python perception\install_wake_features.py
+.venv\Scripts\python -m pip install -r perception\requirements-voice.txt
 ```
 
-Le modèle du mot « Cornelius » est fourni dans le dépôt, dans `models\cornelius.onnx`. Voir [Mot d’appel](../fonctionnalites/mot-d-appel.md).
+Le modèle du mot « Cornelius » est fourni dans le dépôt, dans `models\cornelius.onnx`. Voir [Mot d’appel](../fonctionnalites/mot-d-appel.md). La dernière ligne ajoute la [reconnaissance de la voix](../fonctionnalites/reconnaissance-de-la-voix.md) (qui dit « Cornelius »).
 
 ## Démarrer
 

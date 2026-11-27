@@ -21,6 +21,10 @@ import type { SessionMode } from './types.js';
  *
  * « Cornelius » réservé aux membres garde la caméra allumée en veille : c’est le seul moyen de
  * savoir, au mot d’appel, qui parle avant d’ouvrir la conversation.
+ *
+ * Option « caméra seulement au mot d’appel » : avec « Cornelius », la caméra
+ * dort en veille dans tous les cas (étape 4) ; la reconnaissance de la voix dit qui parle, et
+ * « membres » devient l’étape 4 avec « personnes reconnues » (une voix reconnue est exigée).
  */
 export const OPENING_TRIGGERS = ['presence', 'gaze', 'voice'] as const;
 export type OpeningTrigger = (typeof OPENING_TRIGGERS)[number];
@@ -32,6 +36,8 @@ export interface Opening {
   audience: OpeningAudience;
   /** « Cornelius » pour tout le monde : reconnaître la personne pendant la conversation. */
   recognizeVoice: boolean;
+  /** « Cornelius » : caméra éteinte en veille, allumée seulement pendant la conversation. */
+  cameraOnWake?: boolean;
 }
 
 export interface OpeningSettings {
@@ -39,13 +45,17 @@ export interface OpeningSettings {
   knownPeopleOnly: boolean;
   wakeWord: boolean;
   voiceRecognition: boolean;
+  cameraOnWake?: boolean;
 }
 
 export function isOpening(value: unknown): value is Opening {
   if (typeof value !== 'object' || value === null) return false;
   const entry = value as Record<string, unknown>;
   return (
-    Object.keys(entry).every((key) => ['trigger', 'audience', 'recognizeVoice'].includes(key)) &&
+    Object.keys(entry).every((key) =>
+      ['trigger', 'audience', 'recognizeVoice', 'cameraOnWake'].includes(key),
+    ) &&
+    (entry.cameraOnWake === undefined || typeof entry.cameraOnWake === 'boolean') &&
     (OPENING_TRIGGERS as readonly unknown[]).includes(entry.trigger) &&
     (OPENING_AUDIENCES as readonly unknown[]).includes(entry.audience) &&
     typeof entry.recognizeVoice === 'boolean'
@@ -55,8 +65,16 @@ export function isOpening(value: unknown): value is Opening {
 /** Lit les réglages enregistrés, y compris les combinaisons anciennes qui se recouvraient. */
 export function openingFromSettings(settings: OpeningSettings): Opening {
   const { mode, knownPeopleOnly, wakeWord, voiceRecognition } = settings;
+  const cameraOnWake = settings.cameraOnWake === true;
+  // Absent quand désactivée : les ouvertures sans l’option gardent leur forme d’avant.
+  const wakeCamera = cameraOnWake ? { cameraOnWake } : {};
   if (mode === 4)
-    return { trigger: 'voice', audience: 'everyone', recognizeVoice: voiceRecognition };
+    return {
+      trigger: 'voice',
+      audience: knownPeopleOnly && cameraOnWake ? 'members' : 'everyone',
+      recognizeVoice: voiceRecognition,
+      ...wakeCamera,
+    };
   const members = mode === 2 || knownPeopleOnly;
   // Ancien « mot d’appel exigé » dans une étape caméra : la personne était déjà reconnue.
   if (wakeWord)
@@ -64,24 +82,36 @@ export function openingFromSettings(settings: OpeningSettings): Opening {
       trigger: 'voice',
       audience: members ? 'members' : 'everyone',
       recognizeVoice: members ? voiceRecognition : true,
+      ...wakeCamera,
     };
   return {
     trigger: mode === 3 ? 'gaze' : 'presence',
     audience: members ? 'members' : 'everyone',
     recognizeVoice: voiceRecognition,
+    ...wakeCamera,
   };
 }
 
 export function settingsForOpening(opening: Opening): OpeningSettings {
   const members = opening.audience === 'members';
   const voiceRecognition = opening.recognizeVoice;
+  const cameraOnWake = opening.cameraOnWake === true;
+  const wakeCamera = cameraOnWake ? { cameraOnWake } : {};
+  if (opening.trigger === 'voice' && cameraOnWake)
+    return { mode: 4, knownPeopleOnly: members, wakeWord: true, voiceRecognition, ...wakeCamera };
   if (opening.trigger === 'voice')
     return members
-      ? { mode: 2, knownPeopleOnly: false, wakeWord: true, voiceRecognition }
-      : { mode: 4, knownPeopleOnly: false, wakeWord: true, voiceRecognition };
+      ? { mode: 2, knownPeopleOnly: false, wakeWord: true, voiceRecognition, ...wakeCamera }
+      : { mode: 4, knownPeopleOnly: false, wakeWord: true, voiceRecognition, ...wakeCamera };
   if (opening.trigger === 'gaze')
-    return { mode: 3, knownPeopleOnly: members, wakeWord: false, voiceRecognition };
-  return { mode: members ? 2 : 1, knownPeopleOnly: false, wakeWord: false, voiceRecognition };
+    return { mode: 3, knownPeopleOnly: members, wakeWord: false, voiceRecognition, ...wakeCamera };
+  return {
+    mode: members ? 2 : 1,
+    knownPeopleOnly: false,
+    wakeWord: false,
+    voiceRecognition,
+    ...wakeCamera,
+  };
 }
 
 export function sameOpeningSettings(a: OpeningSettings, b: OpeningSettings): boolean {
@@ -89,7 +119,8 @@ export function sameOpeningSettings(a: OpeningSettings, b: OpeningSettings): boo
     a.mode === b.mode &&
     a.knownPeopleOnly === b.knownPeopleOnly &&
     a.wakeWord === b.wakeWord &&
-    a.voiceRecognition === b.voiceRecognition
+    a.voiceRecognition === b.voiceRecognition &&
+    (a.cameraOnWake === true) === (b.cameraOnWake === true)
   );
 }
 
@@ -99,12 +130,19 @@ export function sameOpeningSettings(a: OpeningSettings, b: OpeningSettings): boo
  * dès qu’elle dit « Cornelius », sans attendre le démarrage de la caméra.
  */
 export function cameraWatchesInStandby(opening: Opening): boolean {
+  if (opening.trigger === 'voice' && opening.cameraOnWake) return false;
   return !voiceOnlyOpening(opening) || opening.recognizeVoice;
 }
 
-/** « Cornelius » pour tout le monde : seule la voix ouvre, et seul le silence ferme. */
+/**
+ * « Cornelius » pour tout le monde, ou caméra seulement au mot d’appel (étape 4) : seule la voix
+ * ouvre, et seul le silence ferme.
+ */
 export function voiceOnlyOpening(opening: Opening): boolean {
-  return opening.trigger === 'voice' && opening.audience === 'everyone';
+  return (
+    opening.trigger === 'voice' &&
+    (opening.audience === 'everyone' || opening.cameraOnWake === true)
+  );
 }
 
 /**
@@ -117,6 +155,7 @@ export function currentOpening(state: {
   knownPeopleOnly?: boolean;
   wakeWord: { enabled: boolean };
   voiceRecognition?: boolean;
+  cameraOnWake?: boolean;
 }): Opening {
   return (
     state.opening ??
@@ -125,6 +164,7 @@ export function currentOpening(state: {
       knownPeopleOnly: state.knownPeopleOnly === true,
       wakeWord: state.wakeWord.enabled,
       voiceRecognition: state.voiceRecognition === true,
+      cameraOnWake: state.cameraOnWake === true,
     })
   );
 }

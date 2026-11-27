@@ -372,7 +372,41 @@ export interface DevicesStatus {
     lookalikes?: { profileIds: [string, string]; similarity: number }[];
     diagnostic: string | null;
     vision: VisionStatus;
+    /** Reconnaissance du locuteur ; absent des serveurs qui ne l’ont pas. */
+    voice?: VoiceRecognitionStatus;
   };
+}
+
+/** Une identification par la voix : au mot d’appel, puis sur la demande. Jamais de son. */
+export interface VoiceIdentification {
+  at: number;
+  source: 'wake' | 'request';
+  profileId: string | null;
+  /** Meilleure ressemblance (cosinus) et celle du second profil. */
+  score: number;
+  second: number;
+  seconds: number;
+  /** Profil qui ressemblait le plus, même sous le seuil (pour régler le seuil). */
+  closestProfileId: string | null;
+}
+
+export interface VoiceRecognitionStatus {
+  ready: boolean;
+  detail: string | null;
+  threshold: number;
+  margin: number;
+  voices: { profileId: string; templates: number; enrolledAt: number }[];
+  enrollment: {
+    profileId: string;
+    speechSeconds: number;
+    requiredSeconds: number;
+    /** « Cornelius » entendus pendant la lecture (empreintes courtes). */
+    wakes?: number;
+    requiredWakes?: number;
+    expiresAt: number;
+  } | null;
+  result: { profileId: string; ok: boolean; message: string; at: number } | null;
+  history: VoiceIdentification[];
 }
 
 export const IMAGE_GENERATION_MODELS = [

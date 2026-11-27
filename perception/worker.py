@@ -17,6 +17,7 @@ from camera import Camera
 from browser_camera import BrowserCamera
 from enrollment import Enrollment
 from scene import MODEL_DIRECTORIES, SceneCaptioner, SceneWorker
+from speaker import RequestConfirmation, SpeakerRecognizer, VoiceEnrollment, WakeHistory
 
 ROOT = Path(__file__).resolve().parent.parent
 VISION_DEVICES = {"auto", "gpu", "cpu"}
@@ -38,6 +39,25 @@ class VisionUnavailable(RuntimeError):
 
 
 class Worker:
+    # Reconnaissance du locuteur : lecture du texte en cours, confirmation sur la demande. Au
+    # niveau de la classe, comme les deux objets ci-dessous créés au premier usage : un worker
+    # construit sans __init__ (tests) les a aussi.
+    voice_enrollment = None
+    confirmation = None
+
+    @property
+    def speaker(self):
+        if "_speaker" not in self.__dict__:
+            self.__dict__["_speaker"] = SpeakerRecognizer(ROOT / "models")
+        return self.__dict__["_speaker"]
+
+    @property
+    def wake_history(self):
+        """Les 2 dernières secondes de chaque flux de veille."""
+        if "_wake_history" not in self.__dict__:
+            self.__dict__["_wake_history"] = WakeHistory()
+        return self.__dict__["_wake_history"]
+
     def __init__(self, camera):
         self.vision = None
         self.vad = Vad(ROOT / "models" / "silero.onnx")
@@ -328,16 +348,37 @@ class Worker:
                     if entry is None or entry[1] is None or self.wake.model is None:
                         continue
                     stream_id, stream = entry
+                    self.wake_history.add(message[1], message[2:])
+                    enrolling = self.voice_enrollment
+                    if enrolling is not None:
+                        await self.voice_enrollment_audio(socket, message[1], message[2:])
                     try:
                         score = await asyncio.to_thread(stream.process, message[2:])
                     except Exception as error:
                         self.wake_failed("Inférence du mot d’appel indisponible (" + type(error).__name__ + ").")
                         await socket.send(json.dumps(self.wake.status()))
                         continue
+                    if enrolling is not None:
+                        # Pendant la lecture du texte, « Cornelius » n'ouvre pas de conversation :
+                        # il devient une empreinte courte de la voix enregistrée.
+                        if score is not None and self.voice_enrollment is enrolling:
+                            enrolling.add_wake(self.wake_history.take(message[1]))
+                            progress = enrolling.progress()
+                            if progress:
+                                await socket.send(json.dumps(progress))
+                        continue
                     if score is not None:
-                        await socket.send(json.dumps({
-                            "type": "wake_detected", "streamId": stream_id, "score": score
-                        }))
+                        detected = {"type": "wake_detected", "streamId": stream_id, "score": score}
+                        if self.speaker.profiles:
+                            try:
+                                speaker = await asyncio.to_thread(
+                                    self.speaker.identify, self.wake_history.take(message[1]), "wake")
+                            except Exception as error:
+                                self.report("Reconnaissance de la voix", error)
+                                speaker = None
+                            if speaker is not None:
+                                detected["speaker"] = speaker
+                        await socket.send(json.dumps(detected))
                     continue
                 if len(message) != 1024 or self.interaction is None:
                     continue
@@ -346,6 +387,19 @@ class Worker:
                 if speaking != self.last_speech or now - self.last_vad_sent > 0.25:
                     await socket.send(json.dumps({"type": "vad", "interactionId": self.interaction, "speaking": speaking}))
                     self.last_speech, self.last_vad_sent = speaking, now
+                confirmation = self.confirmation
+                if confirmation is not None and confirmation.interaction == self.interaction:
+                    samples = confirmation.add(message, speaking)
+                    if samples is not None:
+                        self.confirmation = None
+                        try:
+                            speaker = await asyncio.to_thread(self.speaker.identify, samples, "request")
+                        except Exception as error:
+                            self.report("Reconnaissance de la voix", error)
+                            speaker = None
+                        if speaker is not None:
+                            await socket.send(json.dumps({"type": "voice_identified",
+                                "interactionId": confirmation.interaction, "speaker": speaker}))
                 continue
             # Une commande refusée (réglage invalide, champ absent) ne ferme pas la connexion :
             # elle porte aussi la détection de parole et le mot d’appel, et le serveur renverrait
@@ -364,6 +418,27 @@ class Worker:
         """Mot d’appel en panne : les flux restent inscrits, sans modèle, pour reprendre ensuite."""
         self.wake.fail(detail)
         self.wake_streams = {slot: (stream_id, None) for slot, (stream_id, _) in self.wake_streams.items()}
+
+    async def voice_enrollment_audio(self, socket, slot, pcm):
+        enrollment = self.voice_enrollment
+        await asyncio.to_thread(enrollment.add, slot, pcm)
+        progress = enrollment.progress()
+        if progress:
+            await socket.send(json.dumps(progress))
+        if not enrollment.complete():
+            return
+        self.voice_enrollment = None
+        try:
+            templates, reason = await asyncio.to_thread(enrollment.templates, self.speaker)
+        except Exception as error:
+            self.report("Enregistrement de la voix", error)
+            templates, reason = None, "error"
+        if templates:
+            await socket.send(json.dumps({"type": "voice_enrolled", "id": enrollment.request["id"],
+                                          "templates": templates}))
+        else:
+            await socket.send(json.dumps({"type": "voice_enrollment_failed",
+                                          "id": enrollment.request["id"], "reason": reason}))
 
     async def release_wake_streams(self, streams):
         for _, stream in streams:
@@ -414,6 +489,8 @@ class Worker:
             self.identity_hold_ms = event.get("identityHoldMs", 8000)
             self.engagement = event.get("engagement", dict(DEFAULT_ENGAGEMENT))
             self.detection_width = event.get("detectionWidth")
+            self.speaker.set_profiles([(v["profileId"], v["templates"]) for v in event.get("voices", [])])
+            self.speaker.configure(event.get("voiceThreshold"), event.get("voiceMargin"))
             if self.vision:
                 self.configure_vision()
             request = event.get("enrollment")
@@ -442,6 +519,18 @@ class Worker:
         elif event["type"] == "audio":
             self.interaction = event["interactionId"]
             self.vad.reset()
+            self.confirmation = RequestConfirmation(self.interaction) if self.speaker.profiles else None
+        elif event["type"] == "voice_enroll":
+            ready = await asyncio.to_thread(self.speaker.ready)
+            if not ready:
+                await socket.send(json.dumps({"type": "voice_enrollment_failed",
+                                              "id": event["enrollment"]["id"], "reason": "unavailable"}))
+                return
+            model = ROOT / "models" / "silero.onnx"
+            self.voice_enrollment = VoiceEnrollment(event["enrollment"], lambda: Vad(model))
+            await socket.send(json.dumps(self.voice_enrollment.progress()))
+        elif event["type"] == "voice_cancel":
+            self.voice_enrollment = None
         elif (event["type"] == "wake_start" and isinstance(event.get("streamId"), str)
               and isinstance(event.get("slot"), int) and 0 <= event["slot"] < 256):
             slot = event["slot"]
@@ -468,6 +557,9 @@ class Worker:
                 await socket.send(json.dumps(self.wake.status()))
         elif event["type"] == "wake_end":
             ended = [entry for entry in self.wake_streams.values() if entry[0] == event.get("streamId")]
+            for slot, entry in self.wake_streams.items():
+                if entry[0] == event.get("streamId"):
+                    self.wake_history.drop(slot)
             self.wake_streams = {slot: entry for slot, entry in self.wake_streams.items()
                                  if entry[0] != event.get("streamId")}
             await self.release_wake_streams(ended)
@@ -538,6 +630,7 @@ class Worker:
                                    additional_headers={"Authorization": "Bearer " + token},
                                    max_size=256_000, max_queue=4, open_timeout=5) as socket:
                     self.enrollment, self.last_progress, self.interaction = None, None, None
+                    self.voice_enrollment, self.confirmation = None, None
                     # Le serveur réinscrit ses flux de veille : leurs modèles retournent en réserve.
                     streams, self.wake_streams = list(self.wake_streams.values()), {}
                     await self.release_wake_streams(streams)
@@ -547,6 +640,7 @@ class Worker:
                     if self.scene:
                         self.scene.cancel("Perception reconnectée.")
                     await socket.send(json.dumps(self.wake.status()))
+                    await socket.send(json.dumps(await asyncio.to_thread(self.speaker.status)))
                     tasks = [asyncio.create_task(self.observations(socket)),
                              asyncio.create_task(self.commands(socket)),
                              asyncio.create_task(self.vision_events(socket))]

@@ -6,6 +6,13 @@ Le fonctionnement actuel est décrit dans la [documentation](docs/README.md). Ce
 
 ## Non publié
 
+### 2026-11-27 : reconnaissance de la voix, caméra seulement au mot d’appel
+
+**Ajouté**
+
+- **Reconnaissance de la voix.** Cornelius reconnaît la personne qui dit « Cornelius », sans caméra, et ouvre la conversation à son profil (mémoire, sources, agents). Chaque personne lit un court texte près du miroir (**Le foyer et les visages → Reconnaissance de la voix**) ; les « Cornelius » lus servent d’empreintes courtes, comparables au mot d’appel. Empreintes CAM++ (3D-Speaker, Apache 2.0) calculées en local par sherpa-onnx, 17 ms sur un i5-9400 ; aucun son conservé, empreintes effacées avec le profil et des sauvegardes. Une conversation encore anonyme est confirmée sur les premières secondes de la demande. Le prénom s’affiche tout de suite sur le miroir. La voix personnalise ; elle ne sert jamais à autoriser une action. Installation : `perception/requirements-voice.txt` (avec le mot d’appel) et le modèle `campplus.onnx`. Nouvelles tables `profile_voices` et `voice_recognition_preferences`. Voir [La reconnaissance de la voix](docs/fonctionnalites/reconnaissance-de-la-voix.md) ([#69](https://github.com/lfpoulain/Cornelius/issues/69), par [LucQuebec](https://github.com/LucQuebec)).
+- **Caméra seulement au mot d’appel.** Option de **Caméra du miroir** quand « Cornelius » ouvre la conversation : la caméra est éteinte en veille (son voyant aussi) et s’allume pendant la conversation. Réservé aux membres du foyer, la voix reconnue ouvre tout de suite ; sinon la caméra s’allume et un visage reconnu dans les 6 s ouvre encore la conversation. Cornelius salue comme d’habitude. La mise en route indique « Éteinte en veille » au lieu de « Aucune caméra détectée ». Nouvelle table `camera_wake_preferences`. Voir [La reconnaissance de la voix](docs/fonctionnalites/reconnaissance-de-la-voix.md#caméra-seulement-au-mot-dappel) ([#69](https://github.com/lfpoulain/Cornelius/issues/69), par [LucQuebec](https://github.com/LucQuebec)).
+
 ### 2026-11-25 : lecteur audio, flux HLS
 
 **Ajouté**

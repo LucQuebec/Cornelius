@@ -24,7 +24,7 @@ Ces fichiers de tiers sont copiés dans le dépôt. Leur notice doit rester à c
 
 L’interface compilée (`dist/web`) contient notamment React et React DOM (MIT, Meta Platforms, Inc. et ses affiliés), Three.js (MIT, three.js authors), Radix UI (MIT, WorkOS), Lucide (ISC, Lucide Contributors), Tailwind CSS et tailwind-merge (MIT), clsx (MIT, Luke Edwards), class-variance-authority (Apache 2.0, Joe Bell) et hls.js (Apache 2.0, Dailymotion et les contributeurs de hls.js ; version 1.5.17 épinglée, chargée par le miroir seulement pour un flux HLS). Le serveur repose sur Fastify (MIT, The Fastify Team), la bibliothèque OpenAI pour Node.js (Apache 2.0, OpenAI), ws (MIT), Ajv (MIT) et selfsigned (MIT). Les textes complets de leurs licences sont dans `node_modules/<paquet>/` après `npm ci`.
 
-La perception et la génération d’images utilisent ONNX Runtime (MIT, Microsoft), OpenCV (Apache 2.0), NumPy, SciPy et scikit-learn (BSD 3-Clause), Pillow (licence HPND/MIT-CMU), PyTorch (BSD 3-Clause), Diffusers, Transformers, Accelerate, Tokenizers, safetensors et huggingface_hub (Apache 2.0, Hugging Face), et openWakeWord (Apache 2.0, David Scripka). Leurs versions sont fixées dans `perception/requirements*.txt` et `image_generation/requirements.txt` ; leurs licences sont installées avec elles dans `.venv` et `.venv-image`.
+La perception et la génération d’images utilisent ONNX Runtime (MIT, Microsoft), OpenCV (Apache 2.0), NumPy, SciPy et scikit-learn (BSD 3-Clause), Pillow (licence HPND/MIT-CMU), PyTorch (BSD 3-Clause), Diffusers, Transformers, Accelerate, Tokenizers, safetensors et huggingface_hub (Apache 2.0, Hugging Face), openWakeWord (Apache 2.0, David Scripka) et sherpa-onnx (Apache 2.0, Next-gen Kaldi / k2-fsa). Leurs versions sont fixées dans `perception/requirements*.txt` et `image_generation/requirements.txt` ; leurs licences sont installées avec elles dans `.venv` et `.venv-image`.
 
 ## Modèles téléchargés
 
@@ -35,6 +35,7 @@ En dehors du mot d’appel « Cornelius » (voir plus haut), Cornelius ne contie
 | YuNet (détection des visages) | OpenCV Zoo, Shiqi Yu et al. | MIT |
 | SFace (reconnaissance des visages) | OpenCV Zoo, Yaoyao Zhong et al. | Apache 2.0 |
 | Silero VAD (détection de la parole) | Silero Team | MIT |
+| CAM++ (reconnaissance de la voix, `campplus.onnx`) | 3D-Speaker, Alibaba Tongyi Lab | Apache 2.0 |
 | LFM2.5-VL 450M, 1.6B et 3B (vision locale) | Liquid AI | LFM Open License v1.0 |
 | Prétraitement du mot d’appel (`melspectrogram.onnx`, `embedding_model.onnx`) | openWakeWord, David Scripka | voir [docs/reference/licences.md](docs/reference/licences.md) |
 | SDXL Turbo | Stability AI | Stability AI Community License |

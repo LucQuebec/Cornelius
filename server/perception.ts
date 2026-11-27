@@ -6,6 +6,8 @@ import type {
   EnrollmentResult,
   PerceptionObservation,
   RecognitionLive,
+  VoiceIdentification,
+  VoiceRecognitionStatus,
 } from '../shared/types.js';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
@@ -25,6 +27,24 @@ const ENROLLMENT_RESULT_MS = 10 * 60_000;
 const RETRY = 'Recommencez seul, face à la caméra, bien éclairé.';
 // Flux de veille simultanés : le miroir et les satellites (un octet d’emplacement par trame).
 const MAX_WAKE_STREAMS = 16;
+// Reconnaissance du locuteur : lecture du texte en deux minutes au plus.
+const VOICE_ENROLLMENT_MS = 120_000;
+const VOICE_DIMENSION = 512;
+const VOICE_MODEL = '3dspeaker-campplus-voxceleb-16k';
+const VOICE_HISTORY = 20;
+export const VOICE_MESSAGES = {
+  saved: 'Voix mémorisée.',
+  cancelled: 'Enregistrement de la voix annulé.',
+  expired: 'Temps écoulé : relisez le texte, près du miroir, sans bruit autour.',
+  silence: 'Aucune parole entendue : vérifiez le micro du miroir.',
+  short: 'Pas assez de parole : relisez le texte en entier.',
+  mixed: 'Voix non retenue : plusieurs personnes semblaient parler. Recommencez seul.',
+  unavailable: 'Reconnaissance de la voix indisponible : modèle ou sherpa-onnx absent.',
+  error: 'Enregistrement de la voix en échec : consultez le journal de la perception.',
+  perception: 'Enregistrement interrompu : la perception s’est arrêtée.',
+} as const;
+
+export type WakeSpeaker = { profileId: string | null } | undefined;
 export const ENROLLMENT_MESSAGES = {
   saved: 'Visage mémorisé.',
   cancelled: 'Enregistrement annulé.',
@@ -97,7 +117,25 @@ export class PerceptionBridge {
   private lookalikes: NonNullable<DevicesStatus['perception']['lookalikes']> = [];
   private progress: DevicesStatus['perception']['enrollmentProgress'] = null;
   private audioInteraction: string | null = null;
-  private wakeStreams = new Map<string, { slot: number; detected: (score: number) => void }>();
+  private wakeStreams = new Map<
+    string,
+    { slot: number; detected: (score: number, speaker: WakeSpeaker) => void }
+  >();
+  private voiceReady = false;
+  private voiceDetail: string | null = null;
+  private voiceEnrollment: {
+    id: string;
+    profileId: string;
+    expiresAt: number;
+    speechSeconds: number;
+    requiredSeconds: number;
+    wakes: number;
+    requiredWakes: number;
+  } | null = null;
+  private voiceResult: VoiceRecognitionStatus['result'] = null;
+  private voiceHistory: VoiceIdentification[] = [];
+  /** Identification sur la demande : le contrôleur l’applique à la conversation en cours. */
+  onVoiceIdentified: (interactionId: string, profileId: string | null) => void = () => {};
   private wakeReady = false;
   private lastVadAt = 0;
   private diagnostic: string | null = null;
@@ -168,6 +206,7 @@ export class PerceptionBridge {
       lookalikes: this.lookalikes.map((pair) => ({ ...pair })),
       diagnostic: this.diagnostic,
       vision: this.visionSnapshot(),
+      voice: this.voiceSnapshot(),
     };
   }
   private visionSnapshot(): DevicesStatus['perception']['vision'] {
@@ -232,6 +271,7 @@ export class PerceptionBridge {
     this.lastVadAt = 0;
     // Le service précédent est remplacé : son enregistrement en cours ne se terminera pas.
     this.endEnrollment('rejected', ENROLLMENT_MESSAGES.perception);
+    if (this.voiceEnrollment) this.endVoiceEnrollment(false, VOICE_MESSAGES.perception);
     this.diagnostic = null;
     this.refreshProfiles();
     this.vision?.attach((value) => this.send(value));
@@ -307,7 +347,45 @@ export class PerceptionBridge {
           event.score >= 0 &&
           event.score <= 1
         ) {
-          this.wakeStreams.get(event.streamId)!.detected(event.score);
+          this.wakeStreams
+            .get(event.streamId)!
+            .detected(event.score, this.voiceIdentification(event.speaker));
+        } else if (event.type === 'voice_status' && typeof event.ready === 'boolean') {
+          this.voiceReady = event.ready;
+          this.voiceDetail = typeof event.detail === 'string' ? event.detail.slice(0, 200) : null;
+          this.changed();
+        } else if (
+          event.type === 'voice_enrollment_progress' &&
+          this.voiceEnrollment?.id === event.id &&
+          Number.isInteger(event.speechSeconds) &&
+          Number.isInteger(event.requiredSeconds)
+        ) {
+          this.voiceEnrollment!.speechSeconds = Math.max(0, Math.min(600, event.speechSeconds));
+          this.voiceEnrollment!.requiredSeconds = Math.max(1, Math.min(600, event.requiredSeconds));
+          if (Number.isInteger(event.wakes))
+            this.voiceEnrollment!.wakes = Math.max(0, Math.min(20, event.wakes));
+          if (Number.isInteger(event.requiredWakes))
+            this.voiceEnrollment!.requiredWakes = Math.max(0, Math.min(20, event.requiredWakes));
+          this.changed();
+        } else if (event.type === 'voice_enrolled') this.completeVoiceEnrollment(event);
+        else if (
+          event.type === 'voice_enrollment_failed' &&
+          this.voiceEnrollment?.id === event.id
+        ) {
+          const reason = String(event.reason);
+          this.endVoiceEnrollment(
+            false,
+            reason in VOICE_MESSAGES
+              ? VOICE_MESSAGES[reason as keyof typeof VOICE_MESSAGES]
+              : VOICE_MESSAGES.error,
+          );
+        } else if (
+          event.type === 'voice_identified' &&
+          typeof event.interactionId === 'string' &&
+          event.interactionId === this.controller.scope().interactionId
+        ) {
+          const speaker = this.voiceIdentification(event.speaker);
+          if (speaker) this.onVoiceIdentified(event.interactionId, speaker.profileId);
         } else if (event.type === 'recognition_live') this.receiveLive(event);
         else if (event.type === 'enrolled') this.completeEnrollment(event);
         else if (event.type === 'camera_frame_ack') {
@@ -338,6 +416,8 @@ export class PerceptionBridge {
       this.controller.setWakeWordAvailability(false, 'Perception locale déconnectée.');
       this.camera.disconnect();
       this.endEnrollment('rejected', ENROLLMENT_MESSAGES.perception);
+      this.voiceReady = false;
+      if (this.voiceEnrollment) this.endVoiceEnrollment(false, VOICE_MESSAGES.perception);
       this.vision?.onWorkerDisconnected();
       this.changed();
     });
@@ -405,7 +485,10 @@ export class PerceptionBridge {
    * Un flux de veille (le miroir ou un satellite) : chacun a son emplacement, son propre état
    * openWakeWord dans la perception, et reçoit ses propres détections. Faux si tout est pris.
    */
-  startWakeStream(streamId: string, detected: (score: number) => void): boolean {
+  startWakeStream(
+    streamId: string,
+    detected: (score: number, speaker?: WakeSpeaker) => void,
+  ): boolean {
     if (this.wakeStreams.has(streamId)) return true;
     const used = new Set([...this.wakeStreams.values()].map((stream) => stream.slot));
     let slot = 0;
@@ -493,8 +576,165 @@ export class PerceptionBridge {
       detectionWidth: this.detectionWidth,
       profiles,
       enrollment: this.enrollment,
+      voices: this.voiceTemplates(),
+      ...this.voicePreferences(),
     });
     this.changed();
+  }
+  private voicePreferences(): { voiceThreshold: number; voiceMargin: number } {
+    const row = this.db
+      .prepare('SELECT threshold, margin FROM voice_recognition_preferences WHERE id = 1')
+      .get();
+    return {
+      voiceThreshold: Number(row?.threshold ?? 0.45),
+      voiceMargin: Number(row?.margin ?? 0.08),
+    };
+  }
+  private voiceTemplates(): { profileId: string; templates: number[][] }[] {
+    return this.db
+      .prepare('SELECT profile_id, templates FROM profile_voices')
+      .all()
+      .map((row) => ({
+        profileId: String(row.profile_id),
+        templates: JSON.parse(String(row.templates)) as number[][],
+      }));
+  }
+  voiceSnapshot(): VoiceRecognitionStatus {
+    const preferences = this.voicePreferences();
+    return {
+      ready: this.voiceReady,
+      detail: this.voiceDetail,
+      threshold: preferences.voiceThreshold,
+      margin: preferences.voiceMargin,
+      voices: this.db
+        .prepare('SELECT profile_id, templates, enrolled_at FROM profile_voices')
+        .all()
+        .map((row) => ({
+          profileId: String(row.profile_id),
+          templates: (JSON.parse(String(row.templates)) as unknown[]).length,
+          enrolledAt: Number(row.enrolled_at),
+        })),
+      enrollment: this.voiceEnrollment
+        ? {
+            profileId: this.voiceEnrollment.profileId,
+            speechSeconds: this.voiceEnrollment.speechSeconds,
+            requiredSeconds: this.voiceEnrollment.requiredSeconds,
+            wakes: this.voiceEnrollment.wakes,
+            requiredWakes: this.voiceEnrollment.requiredWakes,
+            expiresAt: this.voiceEnrollment.expiresAt,
+          }
+        : null,
+      result: this.voiceResult ? { ...this.voiceResult } : null,
+      history: this.voiceHistory.map((entry) => ({ ...entry })),
+    };
+  }
+  enrollVoice(profileId: string) {
+    if (this.worker?.readyState !== 1)
+      throw new Error('La perception n’est pas lancée : relancez Cornelius.');
+    if (!this.voiceReady) throw new Error(this.voiceDetail ?? VOICE_MESSAGES.unavailable);
+    if (!this.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId))
+      throw new Error('Profil introuvable.');
+    if (this.wakeStreams.size === 0)
+      throw new Error('Le micro du miroir n’écoute pas : ouvrez le miroir, mot d’appel activé.');
+    if (['connecting', 'ready'].includes(this.controller.sessionState().phase))
+      throw new Error('Attendez la fin de la conversation en cours.');
+    this.voiceEnrollment = {
+      id: randomUUID(),
+      profileId,
+      expiresAt: this.now() + VOICE_ENROLLMENT_MS,
+      speechSeconds: 0,
+      requiredSeconds: 20,
+      wakes: 0,
+      requiredWakes: 3,
+    };
+    this.voiceResult = null;
+    this.send({ type: 'voice_enroll', enrollment: { id: this.voiceEnrollment.id, profileId } });
+    this.changed();
+  }
+  cancelVoiceEnrollment() {
+    if (!this.voiceEnrollment) return;
+    this.send({ type: 'voice_cancel' });
+    this.endVoiceEnrollment(false, VOICE_MESSAGES.cancelled);
+  }
+  forgetVoice(profileId: string) {
+    this.db.prepare('DELETE FROM profile_voices WHERE profile_id = ?').run(profileId);
+    if (this.voiceEnrollment?.profileId === profileId) this.cancelVoiceEnrollment();
+    if (this.voiceResult?.profileId === profileId) this.voiceResult = null;
+    this.voiceHistory = this.voiceHistory.filter(
+      (entry) => entry.profileId !== profileId && entry.closestProfileId !== profileId,
+    );
+    this.refreshProfiles();
+  }
+  setVoiceThreshold(threshold: number, margin: number) {
+    if (!(threshold >= 0.2 && threshold <= 0.9) || !(margin >= 0 && margin <= 0.5))
+      throw new Error('Seuil de la voix invalide.');
+    this.db
+      .prepare('UPDATE voice_recognition_preferences SET threshold = ?, margin = ? WHERE id = 1')
+      .run(threshold, margin);
+    this.refreshProfiles();
+  }
+  private endVoiceEnrollment(ok: boolean, message: string) {
+    const enrollment = this.voiceEnrollment;
+    this.voiceEnrollment = null;
+    if (enrollment)
+      this.voiceResult = { profileId: enrollment.profileId, ok, message, at: this.now() };
+    this.changed();
+  }
+  private completeVoiceEnrollment(event: { id?: unknown; templates?: unknown }) {
+    const enrollment = this.voiceEnrollment;
+    if (!enrollment || event.id !== enrollment.id) return;
+    const received = Array.isArray(event.templates) ? (event.templates as unknown[]) : [];
+    const templates: number[][] = [];
+    for (const vector of received.length >= 4 && received.length <= 16 ? received : []) {
+      if (
+        !Array.isArray(vector) ||
+        vector.length !== VOICE_DIMENSION ||
+        !vector.every((v) => typeof v === 'number' && Number.isFinite(v))
+      )
+        break;
+      const norm = Math.hypot(...(vector as number[]));
+      if (!(norm > 0.01)) break;
+      templates.push((vector as number[]).map((v) => v / norm));
+    }
+    if (templates.length < 4 || templates.length !== received.length)
+      return this.endVoiceEnrollment(false, VOICE_MESSAGES.error);
+    if (!this.db.prepare('SELECT id FROM profiles WHERE id = ?').get(enrollment.profileId))
+      return this.endVoiceEnrollment(false, VOICE_MESSAGES.cancelled);
+    this.db
+      .prepare(
+        'INSERT INTO profile_voices (profile_id, templates, model, enrolled_at) VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET templates=excluded.templates, model=excluded.model, enrolled_at=excluded.enrolled_at',
+      )
+      .run(enrollment.profileId, JSON.stringify(templates), VOICE_MODEL, this.now());
+    this.endVoiceEnrollment(true, VOICE_MESSAGES.saved);
+    this.refreshProfiles();
+  }
+  /** Garde l’identification (scores seulement) et rend le profil reconnu s’il existe encore. */
+  private voiceIdentification(speaker: unknown): WakeSpeaker {
+    if (typeof speaker !== 'object' || speaker === null) return undefined;
+    const value = speaker as Record<string, unknown>;
+    const [score, second, seconds] = ['score', 'second', 'seconds'].map((key) => value[key]);
+    if (![score, second, seconds].every((n) => typeof n === 'number' && Number.isFinite(n)))
+      return undefined;
+    if (value.source !== 'wake' && value.source !== 'request') return undefined;
+    const known = (id: unknown): string | null =>
+      typeof id === 'string' && !!this.db.prepare('SELECT id FROM profiles WHERE id = ?').get(id)
+        ? id
+        : null;
+    const profileId = known(value.profileId);
+    this.voiceHistory = [
+      {
+        at: this.now(),
+        source: value.source as VoiceIdentification['source'],
+        profileId,
+        score: score as number,
+        second: second as number,
+        seconds: seconds as number,
+        closestProfileId: profileId ?? known(value.closestProfileId),
+      },
+      ...this.voiceHistory,
+    ].slice(0, VOICE_HISTORY);
+    this.changed();
+    return { profileId };
   }
   private trackingTimings() {
     const timings = this.controller.getPresenceTimings();
@@ -713,6 +953,10 @@ export class PerceptionBridge {
         'Détection de parole interrompue. Vérifiez le microphone et la perception.',
       );
       this.controller.publish();
+    }
+    if (this.voiceEnrollment && this.voiceEnrollment.expiresAt <= this.now()) {
+      this.send({ type: 'voice_cancel' });
+      this.endVoiceEnrollment(false, VOICE_MESSAGES.expired);
     }
     if (this.enrollment && this.enrollment.expiresAt <= this.now()) {
       this.endEnrollment('expired', ENROLLMENT_MESSAGES.expired);

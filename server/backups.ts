@@ -126,6 +126,13 @@ export class PersonalDataEraser {
     ]);
   }
 
+  /** Empreinte vocale oubliée : effacée aussi des journaux SQLite et des sauvegardes. */
+  voiceForgotten(profileId: string) {
+    this.erase('voix', [
+      { sql: 'DELETE FROM profile_voices WHERE profile_id = ?', params: [profileId] },
+    ]);
+  }
+
   memoriesForgotten(profileId: string, memoryId: string | null) {
     this.erase('souvenir', [
       memoryId

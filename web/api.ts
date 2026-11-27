@@ -529,6 +529,20 @@ export const api = {
   connectPortable: () => post<PortableStatus>('/api/admin/portable/connect', {}, slow),
   servePortable: (on: boolean) => post<PortableStatus>('/api/admin/portable/serve', { on }, slow),
   logoutPortable: () => post<PortableStatus>('/api/admin/portable/logout', {}),
+  // Reconnaissance du locuteur.
+  enrollVoice: (id: string) =>
+    post<{ ok: boolean }>(`/api/admin/profiles/${encodeURIComponent(id)}/voice`, {}),
+  cancelVoiceEnrollment: () =>
+    request<{ ok: boolean }>('/api/admin/voice-enrollment', { method: 'DELETE' }),
+  forgetVoice: (id: string) =>
+    request<{ ok: boolean }>(`/api/admin/profiles/${encodeURIComponent(id)}/voice`, {
+      method: 'DELETE',
+    }),
+  setVoiceThreshold: (threshold: number, margin: number) =>
+    request<{ ok: boolean }>('/api/admin/voice-recognition', {
+      method: 'PUT',
+      body: JSON.stringify({ threshold, margin }),
+    }),
   forgetFace: (id: string) =>
     request<{ ok: boolean }>(`/api/admin/profiles/${encodeURIComponent(id)}/face`, {
       method: 'DELETE',

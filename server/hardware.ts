@@ -59,6 +59,8 @@ export function registerHardware(
     devices(): DevicesStatus;
     /** Le visage oublié est aussi retiré des copies de sécurité de la base. */
     faceForgotten?(profileId: string): void;
+    /** De même pour l’empreinte vocale. */
+    voiceForgotten?(profileId: string): void;
   },
 ) {
   const { live, controller, perception, requireAdmin } = services;
@@ -268,6 +270,47 @@ export function registerHardware(
       return { ok: true };
     },
   );
+  // Reconnaissance du locuteur : lecture du texte devant le micro du miroir.
+  app.post<{ Params: { id: string } }>(
+    '/api/admin/profiles/:id/voice',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      try {
+        perception.enrollVoice(req.params.id);
+        return { ok: true };
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    },
+  );
+  app.delete('/api/admin/voice-enrollment', { preHandler: requireAdmin }, async () => {
+    perception.cancelVoiceEnrollment();
+    return { ok: true };
+  });
+  app.delete<{ Params: { id: string } }>(
+    '/api/admin/profiles/:id/voice',
+    { preHandler: requireAdmin },
+    async (req) => {
+      perception.forgetVoice(req.params.id);
+      services.voiceForgotten?.(req.params.id);
+      return { ok: true };
+    },
+  );
+  app.put<{ Body: { threshold?: unknown; margin?: unknown } | undefined }>(
+    '/api/admin/voice-recognition',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { threshold, margin } = req.body ?? {};
+      if (typeof threshold !== 'number' || typeof margin !== 'number')
+        return reply.code(400).send({ error: 'Seuil de la voix invalide.' });
+      try {
+        perception.setVoiceThreshold(threshold, margin);
+        return { ok: true };
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    },
+  );
   app.post('/api/media/offer', { preHandler: kiosk, bodyLimit: 65536 }, async (req, reply) => {
     if (!validateOffer(req.body))
       return reply.code(400).send({ error: 'Offre média indisponible ou invalide.' });
@@ -363,14 +406,14 @@ export function registerHardware(
     if (!controller.isWakeListening())
       return socket.close(1008, 'Écoute du mot d’appel indisponible.');
     const streamId = randomUUID();
-    const started = perception.startWakeStream(streamId, (score) =>
+    const started = perception.startWakeStream(streamId, (score, speaker) =>
       services.wakeArbiter.detected({
         score,
         accept: () =>
           controller.wakeDetected(() => {
             if (socket.readyState === 1 && controller.isAdvancedAudioBuffer())
               socket.send(JSON.stringify({ type: 'wake_detected' }));
-          }),
+          }, speaker),
       }),
     );
     if (!started) return socket.close(1008, 'Écoute du mot d’appel saturée.');

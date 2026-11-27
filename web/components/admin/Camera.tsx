@@ -8,7 +8,7 @@ import {
 } from '../../../shared/camera';
 import type { DevicesStatus, MirrorState } from '../../../shared/types';
 import type { RunAction } from './types';
-import { request } from '../../api';
+import { api, request } from '../../api';
 import { isSessionActive } from './format';
 import { Field } from './shared';
 import { useCameraHold } from './useCameraHold';
@@ -60,7 +60,8 @@ export function Camera({
   const connected = !!status?.perception.connected;
   const [selected, setSelected] = useState(camera?.selectedId ?? '');
   const [open, setOpen] = useState(false);
-  const standbyOff = !cameraWatchesInStandby(currentOpening(state));
+  const opening = currentOpening(state);
+  const standbyOff = !cameraWatchesInStandby(opening);
   useCameraHold(connected);
   // Caméra pas encore rallumée par le maintien : on attend, sans vider ni griser la liste.
   const starting = connected && !!camera?.suspended;
@@ -84,6 +85,34 @@ export function Camera({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {opening.trigger === 'voice' && (
+          <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
+            <div className="space-y-1">
+              <Label htmlFor="camera-on-wake">
+                Allumer la caméra seulement quand Cornelius entend son nom
+              </Label>
+              <p className="text-xs text-muted-foreground" id="camera-on-wake-detail">
+                En veille, la caméra reste éteinte. Elle s’allume pendant la conversation, pour
+                reconnaître le visage et pour la vision.
+                {opening.audience === 'members' &&
+                  ' Réservé aux membres du foyer : la voix doit être reconnue (Profils → Reconnaissance de la voix).'}
+              </p>
+            </div>
+            <Switch
+              id="camera-on-wake"
+              aria-describedby="camera-on-wake-detail"
+              checked={opening.cameraOnWake === true}
+              onCheckedChange={(cameraOnWake) =>
+                void run(
+                  cameraOnWake
+                    ? 'Caméra allumée seulement au mot d’appel.'
+                    : 'Caméra de nouveau allumée en veille.',
+                  () => api.opening({ ...opening, cameraOnWake }),
+                )
+              }
+            />
+          </div>
+        )}
         <Field id="camera-source" label="Emplacement de la caméra">
           <NativeSelect
             id="camera-source"

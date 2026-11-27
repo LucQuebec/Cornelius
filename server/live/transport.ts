@@ -537,13 +537,13 @@ export class LiveTransport implements SessionTransport {
         },
       },
       !active.satelliteId &&
-        this.controller.sessionState().mode !== 4 &&
+        this.controller.greetsAfterWake() &&
         this.controller.greetingMode() === 'name' &&
         this.controller.activeProfile()?.name
         ? 'Bonjour ' + this.controller.activeProfile()!.name + '.'
         : undefined,
       !active.satelliteId &&
-        this.controller.sessionState().mode !== 4 &&
+        this.controller.greetsAfterWake() &&
         this.controller.greetingMode() === 'free' &&
         this.controller.activeProfile()?.name
         ? 'Salue ' +
@@ -979,7 +979,7 @@ export class LiveTransport implements SessionTransport {
     }
     // Mode voix : la personne vient de dire « Cornelius » et sa demande ; un « Bonjour » la
     // couperait. Le prénom reconnu par la caméra reste un contexte, sans salutation.
-    if (this.controller.sessionState().mode === 4) {
+    if (!this.controller.greetsAfterWake()) {
       if (
         this.append(
           active,

@@ -51,7 +51,7 @@ export interface ReadinessDevices {
   apiConfigured: boolean;
   perception: {
     connected: boolean;
-    camera: Pick<CameraStatus, 'devices' | 'selectedId' | 'error'>;
+    camera: Pick<CameraStatus, 'devices' | 'selectedId' | 'error'> & { suspended?: boolean };
     vision?: { mode: VisionMode };
   };
 }
@@ -223,6 +223,15 @@ function cameraItem(
     return { id: 'camera', status: 'blocked', title, detail: 'Lecture des caméras en cours.' };
   const { error, selectedId, devices: available } = devices.perception.camera;
   if (error) return { id: 'camera', status: 'todo', title, detail: error, action };
+  // Caméra éteinte en veille (au mot d’appel) : la perception ne liste plus les caméras, mais
+  // celle qui est réglée sert dès la prochaine conversation.
+  if (selectedId === null && devices.perception.camera.suspended)
+    return {
+      id: 'camera',
+      status: 'done',
+      title,
+      detail: 'Éteinte en veille : elle s’allume pendant la conversation.',
+    };
   if (selectedId === null)
     return {
       id: 'camera',

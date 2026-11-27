@@ -2027,3 +2027,67 @@ test('un diagnostic d’admission disparaît avec sa cause', (t) => {
   assert.equal(f.transport.opened.length, 0);
   assert.equal(f.state().diagnostic, null);
 });
+
+test('voix reconnue au mot d’appel : le profil est choisi avant l’ouverture', (t) => {
+  const f = voiceFixture(t, false);
+  assert.equal(f.controller.wakeDetected(undefined, { profileId: f.alice.id }), true);
+  assert.equal(f.state().activeProfile?.id, f.alice.id);
+  assert.equal(f.state().selection, 'automatic');
+  // La caméra voit une seule personne encore inconnue : c’est la personne reconnue à la voix.
+  f.see([null]);
+  assert.equal(f.state().presence.people[0]?.profileId, f.alice.id);
+  f.ready();
+  f.controller.close('Fin de test.');
+  f.acknowledgeClose();
+  assert.equal(f.state().activeProfile, null);
+});
+
+test('voix confirmée sur la demande : une conversation anonyme reçoit le profil sans redémarrer', (t) => {
+  const f = voiceFixture(t, false);
+  assert.equal(f.controller.wakeDetected(undefined, { profileId: null }), true);
+  assert.equal(f.state().activeProfile, null);
+  f.controller.voiceIdentified('autre-conversation', f.alice.id);
+  assert.equal(f.state().activeProfile, null);
+  f.controller.voiceIdentified(f.state().session.interactionId!, f.alice.id);
+  assert.equal(f.state().activeProfile?.id, f.alice.id);
+  assert.deepEqual(f.transport.closed, []);
+});
+
+test('caméra seulement au mot d’appel, membres : voix, sinon visage reconnu, sinon rien', (t) => {
+  const f = voiceFixture(t, false);
+  f.controller.setOpening({
+    trigger: 'voice',
+    audience: 'members',
+    recognizeVoice: false,
+    cameraOnWake: true,
+  });
+  assert.equal(f.state().session.mode, 4);
+  assert.equal(f.controller.isCameraOnWake(), true);
+  assert.equal(f.controller.greetsAfterWake(), true);
+  // Voix inconnue : la caméra s’allume et cherche un membre ; au bout de 6 s, rien ne s’ouvre.
+  assert.equal(f.controller.wakeDetected(undefined, { profileId: null }), false);
+  assert.equal(f.controller.isWakeCheckPending(), true);
+  assert.equal(f.state().session.phase, 'idle');
+  f.see([null]);
+  assert.equal(f.state().session.phase, 'idle');
+  f.jump(6500);
+  f.controller.heartbeat();
+  f.controller.tick();
+  assert.equal(f.controller.isWakeCheckPending(), false);
+  assert.match(f.state().diagnostic ?? '', /ni la voix ni le visage/);
+  // Sans voix mémorisée, un visage reconnu pendant l’attente ouvre la conversation à son nom.
+  assert.equal(f.controller.wakeDetected(undefined, { profileId: null }), false);
+  f.see([f.alice.id], 'wake-camera');
+  assert.equal(f.state().session.phase, 'connecting');
+  assert.equal(f.state().activeProfile?.id, f.alice.id);
+  f.controller.close('Fin de test.');
+  f.acknowledgeClose();
+  // Voix reconnue : ouverture immédiate, sans attendre la caméra.
+  assert.equal(f.controller.wakeDetected(undefined, { profileId: f.alice.id }), true);
+  assert.equal(f.state().activeProfile?.id, f.alice.id);
+  assert.equal(f.state().diagnostic, null);
+  // Désactivée : retour à l’étape 2 (caméra allumée en veille).
+  f.controller.setOpening({ trigger: 'voice', audience: 'members', recognizeVoice: false });
+  assert.equal(f.state().session.mode, 2);
+  assert.equal(f.controller.isCameraOnWake(), false);
+});

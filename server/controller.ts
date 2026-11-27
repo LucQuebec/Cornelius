@@ -94,6 +94,8 @@ export interface SessionPreferencesStore {
   setWaitForReply?(enabled: boolean): void;
   getVoiceRecognition?(): boolean;
   setVoiceRecognition?(enabled: boolean): void;
+  getCameraOnWake?(): boolean;
+  setCameraOnWake?(enabled: boolean): void;
   getScreensaver?(): ScreensaverSettings;
   setScreensaver?(settings: ScreensaverSettings): void;
 }
@@ -146,6 +148,10 @@ const voiceIdentityWindowMs = 8000;
 type OpenSource = 'automatic' | 'manual' | 'wake' | 'resume' | 'satellite';
 const satelliteMembersDiagnostic =
   'Satellite : l’ouverture est réservée aux membres reconnus, qu’un satellite ne peut pas voir.';
+const unknownVoiceDiagnostic =
+  'Mot d’appel sans suite : ni la voix ni le visage d’un membre du foyer n’ont été reconnus.';
+/** Caméra seulement au mot d’appel, membres : délai laissé au visage quand la voix ne suffit pas. */
+const wakeCheckMs = 6000;
 const privacyDiagnostic = 'Mode vie privée : plusieurs personnes détectées.';
 const mirrorClosedDiagnostic = 'Ouvrez le miroir pour démarrer une session.';
 const voiceInactiveDiagnostic =
@@ -279,6 +285,12 @@ export class SessionController {
   // Fin de parole du satellite de la conversation en cours (null : celle du foyer).
   private satelliteSilenceMs: number | null = null;
   private voiceRecognition = false;
+  /** Caméra seulement au mot d’appel : éteinte en veille avec « Cornelius ». */
+  private cameraOnWake = false;
+  /** Profil choisi par la voix pour la conversation en cours. */
+  private voiceProfileId: string | null = null;
+  /** Mot d’appel en attente d’un visage reconnu (voix non reconnue), jusqu’à cette date. */
+  private wakeCheckUntil: number | null = null;
   private replyClose = false;
   /** Localive : micro ignoré de la fin de la demande au début de la réponse. */
   private waitForReply = false;
@@ -338,6 +350,7 @@ export class SessionController {
     this.knownPeopleOnly = preferences?.getKnownPeopleOnly?.() ?? false;
     this.silenceClose = { ...(preferences?.getSilenceClose?.() ?? DEFAULT_SILENCE_CLOSE) };
     this.voiceRecognition = preferences?.getVoiceRecognition?.() ?? false;
+    this.cameraOnWake = preferences?.getCameraOnWake?.() ?? false;
     this.replyClose = preferences?.getReplyClose?.() ?? false;
     this.endWord = preferences?.getEndWord?.() ?? false;
     this.endPhrases = cleanEndPhrases(preferences?.getEndPhrases?.() ?? []);
@@ -443,6 +456,24 @@ export class SessionController {
 
   isVoiceRecognitionEnabled(): boolean {
     return this.voiceRecognition;
+  }
+
+  isCameraOnWake(): boolean {
+    return this.cameraOnWake;
+  }
+
+  /** Un mot d’appel attend la caméra pour savoir si c’est un membre du foyer. */
+  isWakeCheckPending(): boolean {
+    return this.wakeCheckUntil !== null && this.now() <= this.wakeCheckUntil;
+  }
+
+  /**
+   * Cornelius salue-t-il à l’ouverture ? Oui, sauf en mode voix classique où la demande suit
+   * le mot d’appel d’un trait. Avec « caméra seulement au mot d’appel » (étape 4 aussi), il salue
+   * comme avant l’option : la personne dit « Cornelius » et attend son « Bonjour ».
+   */
+  greetsAfterWake(): boolean {
+    return this.session.mode !== 4 || this.cameraOnWake;
   }
 
   // Accesseurs légers : `snapshot()` relit les profils en base et clone tout l’état, ce qui
@@ -795,6 +826,18 @@ export class SessionController {
     for (const listener of this.perceptionListeners) listener();
     const running = ['connecting', 'ready'].includes(this.session.phase);
     const people = input.health === 'ok' ? input.people : [];
+    // Mot d’appel en attente : un membre du foyer reconnu par la caméra ouvre la conversation.
+    if (this.isWakeCheckPending() && this.session.phase === 'idle') {
+      const member = people
+        .map((person) => (person.profileId ? this.profiles.get(person.profileId) : undefined))
+        .find((profile) => profile);
+      if (member) {
+        this.wakeCheckUntil = null;
+        this.changeProfile(member, 'automatic', false);
+        this.wakeDetected();
+        return;
+      }
+    }
     // La caméra s’allume avec la conversation et met une à plusieurs secondes à démarrer :
     // le délai pour reconnaître la personne compte à partir de sa première image.
     if (
@@ -831,6 +874,22 @@ export class SessionController {
         this.changeProfile(profile, 'automatic');
       }
     }
+    // La voix a reconnu la personne et la caméra voit une seule personne, encore inconnue : c’est
+    // elle. Le miroir affiche son prénom et la mémoire lui attribue la conversation.
+    // Caméra seulement au mot d’appel : hors conversation, ses dernières images (le temps qu’elle
+    // s’éteigne) ne montrent personne, au lieu d’une « Personne inconnue » sans profil.
+    if (this.cameraOnWake && this.session.phase === 'idle' && this.observation)
+      this.observation = { ...this.observation, presence: false, people: [] };
+    const only = this.observation?.people.length === 1 ? this.observation.people[0]! : null;
+    if (
+      ['connecting', 'ready', 'closing'].includes(this.session.phase) &&
+      only &&
+      only.profileId === null &&
+      this.voiceProfileId !== null &&
+      this.profile?.id === this.voiceProfileId &&
+      this.selection === 'automatic'
+    )
+      only.profileId = this.voiceProfileId;
     this.publish();
   }
 
@@ -1246,6 +1305,10 @@ export class SessionController {
    */
   setOpening(opening: Opening): void {
     const target = settingsForOpening(opening);
+    if (this.cameraOnWake !== (target.cameraOnWake === true)) {
+      this.cameraOnWake = target.cameraOnWake === true;
+      this.preferences?.setCameraOnWake?.(this.cameraOnWake);
+    }
     this.setSessionMode(target.mode);
     this.setKnownPeopleOnly(target.knownPeopleOnly);
     this.setVoiceRecognition(target.voiceRecognition);
@@ -1258,6 +1321,7 @@ export class SessionController {
       knownPeopleOnly: this.knownPeopleOnly,
       wakeWord: this.wakeWordEnabled,
       voiceRecognition: this.voiceRecognition,
+      cameraOnWake: this.cameraOnWake,
     });
   }
 
@@ -1311,8 +1375,55 @@ export class SessionController {
     this.publish();
   }
 
-  wakeDetected(onAccepted?: () => void): boolean {
+  /**
+   * Reconnaissance du locuteur : la voix qui a dit « Cornelius » choisit le profil
+   * avant l’ouverture. Un choix explicite et un visage reconnu devant le miroir l’emportent.
+   * La voix personnalise seulement (mémoire, sources) : elle ne prouve pas l’identité.
+   */
+  private applyVoiceSpeaker(speaker: { profileId: string | null } | undefined): void {
+    if (!speaker?.profileId || this.selection === 'explicit') return;
+    if (['connecting', 'ready', 'closing'].includes(this.session.phase)) return;
+    if (this.session.mode !== 4 && this.observation?.people.some((person) => person.profileId))
+      return;
+    const profile = this.profiles.get(speaker.profileId);
+    if (profile) {
+      this.changeProfile(profile, 'automatic', false);
+      this.voiceProfileId = profile.id;
+    }
+  }
+
+  /**
+   * Confirmation sur les premières secondes de la demande : une conversation encore anonyme
+   * reçoit le profil reconnu, sans redémarrer, dans les modes qui le permettent (1 et 4).
+   */
+  voiceIdentified(interactionId: string, profileId: string | null): void {
+    if (!profileId || interactionId !== this.session.interactionId) return;
+    if (this.profile !== null || this.selection === 'explicit') return;
+    if (this.session.mode !== 1 && this.session.mode !== 4) return;
+    const profile = this.profiles.get(profileId);
+    if (!profile) return;
+    this.changeProfile(profile, 'automatic');
+    this.voiceProfileId = profile.id;
+    this.publish();
+  }
+
+  wakeDetected(onAccepted?: () => void, speaker?: { profileId: string | null }): boolean {
     if (!this.wakeWordEnabled || !this.wakeWordReady) return false;
+    this.applyVoiceSpeaker(speaker);
+    // Caméra seulement au mot d’appel, réservé aux membres : sans voix reconnue (aucune voix
+    // mémorisée, voix trop basse, reconnaissance absente), la caméra s’allume et un visage
+    // reconnu peut encore ouvrir la conversation (voir observeVoiceMode et tick).
+    if (
+      this.session.mode === 4 &&
+      this.knownPeopleOnly &&
+      this.profile === null &&
+      !['connecting', 'ready', 'closing'].includes(this.session.phase)
+    ) {
+      this.wakeCheckUntil = this.now() + wakeCheckMs;
+      this.publish();
+      return false;
+    }
+    this.wakeCheckUntil = null;
     // Dire « Cornelius » est une demande explicite, comme « Démarrer » : elle lève l’arrêt
     // manuel. Sans cela, un arrêt depuis l’administration rendait le mot d’appel muet pour de
     // bon, y compris après redémarrage, sans aucun signe sur le miroir.
@@ -1658,6 +1769,7 @@ export class SessionController {
     this.webSearchActive = false;
     this.closingAt = null;
     this.voiceIdentityUntil = null;
+    this.voiceProfileId = null;
     // Une conversation de satellite ne se rouvre pas d’elle-même : « Cornelius » suffit.
     const reopen = released ? null : this.reopenAfterClose;
     this.reopenAfterClose = null;
@@ -2008,6 +2120,13 @@ export class SessionController {
 
   tick(): void {
     const now = this.now();
+    if (this.wakeCheckUntil !== null && now > this.wakeCheckUntil) {
+      this.wakeCheckUntil = null;
+      if (this.session.phase === 'idle') {
+        this.diagnostic = unknownVoiceDiagnostic;
+        this.publish();
+      }
+    }
     if (this.assistantOutputUntil !== null && now >= this.assistantOutputUntil) {
       const outputEndedAt = this.assistantOutputUntil - voiceOutputGraceMs;
       this.assistantOutputUntil = null;

@@ -602,3 +602,126 @@ test('mode voix : la caméra s’allume avec la conversation et s’éteint apr�
     .find((event) => event.type === 'camera_enabled');
   assert.equal(first?.enabled, false);
 });
+
+const voiceVector = (index: number) =>
+  Array.from({ length: 512 }, (_, i) => (i === index ? 3 : i === index + 1 ? 4 : 0));
+
+test('voix : mémorisation par le flux de veille, empreintes vérifiées, oubli', (t) => {
+  const f = fixture(t);
+  const luc = f.profiles.create('Luc');
+  f.worker.message({ type: 'wake_status', ready: true, detail: null });
+  assert.throws(() => f.bridge.enrollVoice(luc.id), /indisponible/);
+  f.worker.message({ type: 'voice_status', ready: true, detail: null });
+  assert.throws(() => f.bridge.enrollVoice(luc.id), /micro du miroir/);
+  f.bridge.startWakeStream('mirror', () => {});
+  assert.throws(() => f.bridge.enrollVoice('inconnu'), /Profil introuvable/);
+  f.bridge.enrollVoice(luc.id);
+  const request = f.worker.last();
+  assert.equal(request.type, 'voice_enroll');
+  assert.equal(request.enrollment.profileId, luc.id);
+  f.worker.message({
+    type: 'voice_enrollment_progress',
+    id: request.enrollment.id,
+    speechSeconds: 12,
+    requiredSeconds: 20,
+    wakes: 2,
+    requiredWakes: 3,
+  });
+  assert.deepEqual(
+    [
+      f.bridge.voiceSnapshot().enrollment?.speechSeconds,
+      f.bridge.voiceSnapshot().enrollment?.wakes,
+    ],
+    [12, 2],
+  );
+  // Une empreinte de mauvaise taille refuse tout l’envoi.
+  f.worker.message({
+    type: 'voice_enrolled',
+    id: request.enrollment.id,
+    templates: [voiceVector(0), voiceVector(2), voiceVector(4), [1, 2]],
+  });
+  assert.equal(f.bridge.voiceSnapshot().result?.ok, false);
+  assert.equal(f.bridge.voiceSnapshot().voices.length, 0);
+  f.bridge.enrollVoice(luc.id);
+  const second = f.worker.last().enrollment.id;
+  f.worker.message({
+    type: 'voice_enrolled',
+    id: second,
+    templates: [0, 2, 4, 6, 8].map(voiceVector),
+  });
+  const voice = f.bridge.voiceSnapshot();
+  assert.equal(voice.result?.ok, true);
+  assert.deepEqual(
+    voice.voices.map((entry) => [entry.profileId, entry.templates]),
+    [[luc.id, 5]],
+  );
+  // Les empreintes partent normalisées vers la perception avec les profils.
+  const profiles = f.worker.last();
+  assert.equal(profiles.type, 'profiles');
+  assert.deepEqual(profiles.voices[0].templates[0].slice(0, 2), [0.6, 0.8]);
+  assert.equal(profiles.voiceThreshold, 0.45);
+  f.bridge.forgetVoice(luc.id);
+  assert.deepEqual(f.bridge.voiceSnapshot().voices, []);
+  assert.deepEqual(f.worker.last().voices, []);
+});
+
+test('voix : l’échec et l’expiration de la lecture sont dits, la reconnexion l’interrompt', (t) => {
+  const f = fixture(t);
+  const luc = f.profiles.create('Luc');
+  f.worker.message({ type: 'wake_status', ready: true, detail: null });
+  f.worker.message({ type: 'voice_status', ready: true, detail: null });
+  f.bridge.startWakeStream('mirror', () => {});
+  f.bridge.enrollVoice(luc.id);
+  f.worker.message({
+    type: 'voice_enrollment_failed',
+    id: f.worker.last().enrollment.id,
+    reason: 'short',
+  });
+  assert.match(f.bridge.voiceSnapshot().result?.message ?? '', /Pas assez de parole/);
+  f.bridge.enrollVoice(luc.id);
+  f.advance(121_000);
+  f.bridge.tick();
+  assert.equal(f.bridge.voiceSnapshot().enrollment, null);
+  assert.match(f.bridge.voiceSnapshot().result?.message ?? '', /Temps écoulé/);
+  f.bridge.enrollVoice(luc.id);
+  f.bridge.connect(new Worker() as unknown as WebSocket);
+  assert.match(f.bridge.voiceSnapshot().result?.message ?? '', /perception s’est arrêtée/);
+});
+
+test('voix : le locuteur du mot d’appel est transmis, un profil inventé devient personne', (t) => {
+  const f = fixture(t);
+  const luc = f.profiles.create('Luc');
+  f.worker.message({ type: 'wake_status', ready: true, detail: null });
+  const heard: unknown[] = [];
+  f.bridge.startWakeStream('mirror', (_score, speaker) => heard.push(speaker));
+  const speaker = (profileId: string | null) => ({
+    profileId,
+    closestProfileId: profileId,
+    score: 0.5,
+    second: 0.1,
+    seconds: 0.8,
+    source: 'wake',
+  });
+  f.worker.message({ type: 'wake_detected', streamId: 'mirror', score: 0.9 });
+  f.worker.message({
+    type: 'wake_detected',
+    streamId: 'mirror',
+    score: 0.9,
+    speaker: speaker(luc.id),
+  });
+  f.worker.message({
+    type: 'wake_detected',
+    streamId: 'mirror',
+    score: 0.9,
+    speaker: speaker('x'),
+  });
+  assert.deepEqual(heard, [undefined, { profileId: luc.id }, { profileId: null }]);
+  const history = f.bridge.voiceSnapshot().history;
+  assert.deepEqual(
+    history.map((entry) => [entry.profileId, entry.source, entry.score]),
+    [
+      [null, 'wake', 0.5],
+      [luc.id, 'wake', 0.5],
+    ],
+  );
+});

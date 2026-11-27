@@ -113,3 +113,19 @@ test('au démarrage, une ancienne combinaison enregistrée est réécrite une fo
   assert.equal(preferences.getWakeWordEnabled(), true);
   assert.equal(normalizeOpening(preferences), false, 'déjà canonique : rien à réécrire');
 });
+
+test('caméra seulement au mot d’appel : étape 4, éteinte en veille, membres par la voix', () => {
+  for (const audience of ['everyone', 'members'] as const) {
+    const opening = {
+      trigger: 'voice',
+      audience,
+      recognizeVoice: true,
+      cameraOnWake: true,
+    } as const;
+    const settings = settingsForOpening(opening);
+    assert.equal(settings.mode, 4);
+    assert.equal(settings.knownPeopleOnly, audience === 'members');
+    assert.deepEqual(openingFromSettings(settings), opening);
+    assert.equal(cameraWatchesInStandby(opening), false);
+  }
+});

@@ -1,3 +1,4 @@
+import { VoiceEnrollment } from './admin/VoiceEnrollment';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
@@ -648,6 +649,7 @@ export function Admin({
                         run={run}
                         onOpenCamera={() => go('camera')}
                       />
+                      <VoiceEnrollment state={state} status={devices} run={run} />
                     </div>
                   )}
                   {section === 'personality' && (

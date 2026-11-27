@@ -1,0 +1,4 @@
+# Reconnaissance de la voix (facultative, avec le mot d’appel) : empreintes CAM++ par sherpa-onnx,
+# sur le processeur. Voir docs/fonctionnalites/reconnaissance-de-la-voix.md.
+sherpa-onnx==2.0.3
+sherpa-onnx-core==2.0.3

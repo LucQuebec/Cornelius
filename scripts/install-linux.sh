@@ -198,6 +198,8 @@ if [ "$wake" = 1 ]; then
   .venv/bin/python -m pip install --disable-pip-version-check -r perception/requirements-wake.txt
   .venv/bin/python -m pip install --disable-pip-version-check --no-deps openwakeword==0.6.0
   .venv/bin/python perception/install_wake_features.py
+  # Reconnaissance de la voix : qui dit « Cornelius » (docs/fonctionnalites/reconnaissance-de-la-voix.md).
+  .venv/bin/python -m pip install --disable-pip-version-check -r perception/requirements-voice.txt
   [ -f models/cornelius.onnx ] || warn "placez le modèle du mot d’appel dans models/cornelius.onnx (docs/fonctionnalites/mot-d-appel.md)."
 fi
 

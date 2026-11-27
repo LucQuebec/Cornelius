@@ -36,6 +36,8 @@ Chaque choix est enregistré dès le clic. Sous les deux questions, un résumé 
 
 Avec « Cornelius » pour tout le monde, la caméra reste éteinte en veille, sauf si la reconnaissance est cochée (voir la section suivante) : elle reste alors allumée pour reconnaître la personne sans délai. Sans reconnaissance, elle ne s’allume que pendant la conversation, et seulement pour la vision locale (voir [La vision locale](vision-locale.md)).
 
+Avec « Cornelius », l’option **Allumer la caméra seulement quand Cornelius entend son nom** (rubrique **Caméra et reconnaissance**) garde la caméra éteinte en veille dans tous les cas, membres du foyer compris : la voix dit qui parle. Voir [La reconnaissance de la voix](reconnaissance-de-la-voix.md#caméra-seulement-au-mot-dappel).
+
 ## Reconnaître la personne pendant la conversation
 
 Avec « Cornelius » pour tout le monde, une case supplémentaire apparaît : **Reconnaître la personne pendant la conversation**. Elle est décochée au départ.

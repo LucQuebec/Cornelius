@@ -1,4 +1,12 @@
-import { memo, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { mirrorBlocker, type MirrorBlockerId } from '../../shared/readiness';
 import type { DisplayCard, SessionPhase, VoiceActivity } from '../../shared/types';
@@ -304,8 +312,19 @@ export function Mirror({ connection }: { connection: MirrorConnection }) {
           )
           .slice(0, 3)
       : [];
+  // Reconnu par la voix, caméra encore éteinte : le prénom s’affiche tout de suite. Quand la
+  // caméra s’allume, la même personne (même profil) prend le relais sans clignoter.
+  const voiceProfileId =
+    voiceOnlyActive && state?.selection === 'automatic' && state.presence.health !== 'ok'
+      ? (state.activeProfile?.id ?? null)
+      : null;
+  const voicePeople = useMemo(
+    () =>
+      voiceProfileId ? [{ trackId: 'voix', profileId: voiceProfileId, engaged: false }] : null,
+    [voiceProfileId],
+  );
   const people = useSteadyPeople(
-    state?.presence.health === 'ok' ? state.presence.people : NO_PEOPLE,
+    voicePeople ?? (state?.presence.health === 'ok' ? state.presence.people : NO_PEOPLE),
   );
   const shownPeople = useFadingPeople(people);
   const peopleVisible = shownPeople.length > 0;
